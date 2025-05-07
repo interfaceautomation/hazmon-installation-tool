@@ -1,0 +1,16 @@
+{
+  "name": "Sensor Installer",
+  "short_name": "Sensor App",
+  "description": "App for scanning and logging temperature sensor barcodes",
+  "start_url": "/index.html",
+  "display": "standalone",
+  "background_color": "#f3f4f6",
+  "theme_color": "#3b82f6",
+  "icons": [
+    {
+      "src": "/icon.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
