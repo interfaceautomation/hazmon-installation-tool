@@ -60,7 +60,6 @@
         <video id="scanner" playsinline autoplay></video>
         <canvas id="scanner-overlay"></canvas>
       </div>
-      <button id="capture-button" class="w-full bg-blue-500 text-white p-2 rounded hover:bg-blue-600 hidden">Capture</button>
       <form id="sensor-form" class="space-y-4"></form>
       <button id="save-sensors" class="w-full bg-green-500 text-white p-2 rounded hover:bg-green-600">Save Machine</button>
     </div>
@@ -96,7 +95,7 @@
         video.srcObject = stream;
         video.play();
         document.getElementById('status').textContent = mode === 'barcode' 
-          ? 'Camera ready. Align the GS1-128 barcode (6-12 inches away, avoid glare).'
+          ? 'Scanning GS1-128 barcode for Sensor ' + currentSensorIndex + '... Align barcode (6-12 inches away, avoid glare).'
           : 'Camera ready. Align the text above the barcode (6-12 inches away, clear focus).';
         if (mode === 'barcode') {
           initQuagga();
@@ -143,6 +142,7 @@
           return;
         }
         Quagga.start();
+        console.log('Quagga started');
       });
 
       Quagga.onProcessed((result) => {
@@ -163,6 +163,7 @@
           }
           ctx.closePath();
           ctx.stroke();
+          console.log('Barcode detected, box drawn');
         }
       });
 
@@ -172,8 +173,11 @@
         if (cleanedCode && currentSensorIndex !== null) {
           document.getElementById(`sensor-id-${currentSensorIndex}`).value = cleanedCode;
           document.getElementById('status').textContent = `Scanned: ${cleanedCode}. Please verify the ID.`;
+          console.log('Barcode scanned:', cleanedCode);
           stopCamera();
           Quagga.stop();
+        } else {
+          console.log('Invalid barcode data:', rawCode);
         }
       });
     }
@@ -195,7 +199,6 @@
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
       document.getElementById('status').textContent = 'Processing text...';
-      document.getElementById('capture-button').disabled = true;
 
       try {
         const { data: { text } } = await Tesseract.recognize(canvas.toDataURL('image/png'), 'eng', {
@@ -205,8 +208,10 @@
         if (cleanedText && currentSensorIndex !== null) {
           document.getElementById(`sensor-id-${currentSensorIndex}`).value = cleanedText;
           document.getElementById('status').textContent = `Captured: ${cleanedText}. Please verify the ID (zeros may be misread).`;
+          console.log('Text captured:', cleanedText);
         } else {
           document.getElementById('status').textContent = 'No text detected. Try again or enter manually.';
+          console.log('No text detected');
         }
       } catch (err) {
         document.getElementById('status').textContent = 'Error processing text: ' + err.message;
@@ -214,7 +219,6 @@
       }
 
       stopCamera();
-      document.getElementById('capture-button').disabled = false;
     }
 
     // Clean OCR output for slashed zeros
@@ -237,7 +241,6 @@
         Quagga.stop();
       }
       document.getElementById('scanner-container').classList.add('hidden');
-      document.getElementById('capture-button').classList.add('hidden');
       currentSensorIndex = null;
     }
 
@@ -293,23 +296,20 @@
       buttons.forEach((button, index) => {
         button.textContent = mode === 'barcode' ? `Scan Sensor ${index + 1} Barcode` : `Capture Sensor ${index + 1} Text`;
       });
-      document.getElementById('capture-button').textContent = mode === 'barcode' ? 'Scan Barcode' : 'Capture Text';
     }
 
     // Start camera for capturing
     window.captureSensor = (index) => {
       currentSensorIndex = index;
       document.getElementById('scanner-container').classList.remove('hidden');
-      document.getElementById('capture-button').classList.remove('hidden');
-      document.getElementById('status').textContent = mode === 'barcode'
-        ? `Ready to scan GS1-128 barcode for Sensor ${index}...`
-        : `Ready to capture text for Sensor ${index}...`;
+      if (mode === 'text') {
+        document.getElementById('capture-button').classList.remove('hidden');
+      }
       initCamera();
     };
 
-    // Handle capture button
+    // Handle capture button (text mode only)
     document.getElementById('capture-button').addEventListener('click', () => {
-      document.getElementById('status').textContent = mode === 'barcode' ? 'Scanning barcode...' : 'Processing text...';
       if (mode === 'text') {
         captureAndOCR();
       }
