@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Sensor Installer</title>
   <script src="https://cdn.tailwindcss.com"></script>
-  <script src="https://unpkg.com/quagga@0.12.1/dist/quagga.min.js"></script>
+  <script src="https://unpkg.com/tesseract.js@5.1.0/dist/tesseract.min.js"></script>
   <!-- PWA Meta Tags -->
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black">
@@ -29,10 +29,11 @@
     </form>
     <div id="sensor-form-container" class="space-y-4 mt-4 hidden">
       <h2 class="text-lg font-semibold">Sensor Details</h2>
-      <div id="scanner-container" class="w-full h-64 bg-gray-200 mb-4 relative hidden">
+      <div id="scanner-container" class="w-full h-72 bg-gray-200 mb-4 relative hidden">
         <video id="scanner" class="w-full h-full object-cover"></video>
         <canvas id="scanner-overlay" class="absolute top-0 left-0"></canvas>
       </div>
+      <button id="capture-button" class="w-full bg-blue-500 text-white p-2 rounded hover:bg-blue-600 hidden">Capture Numbers</button>
       <form id="sensor-form" class="space-y-4"></form>
       <button id="save-sensors" class="w-full bg-green-500 text-white p-2 rounded hover:bg-green-600">Save Machine</button>
     </div>
@@ -55,41 +56,56 @@
   <script>
     let currentSensorIndex = null;
     let entries = [];
+    let stream = null;
 
-    // Initialize QuaggaJS
-    function initScanner() {
-      Quagga.init({
-        inputStream: {
-          name: 'Live',
-          type: 'LiveStream',
-          target: document.querySelector('#scanner-container'),
-          constraints: {
-            facingMode: 'environment',
-          },
-        },
-        decoder: {
-          readers: ['ean_reader', 'upc_reader', 'code_128_reader'],
-        },
-      }, (err) => {
-        if (err) {
-          document.getElementById('status').textContent = 'Error initializing scanner: ' + err.message;
-          return;
-        }
-        Quagga.start();
-      });
+    // Initialize camera
+    async function initCamera() {
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: 'environment' }
+        });
+        const video = document.getElementById('scanner');
+        video.srcObject = stream;
+        video.play();
+      } catch (err) {
+        document.getElementById('status').textContent = 'Error accessing camera: ' + err.message;
+      }
     }
 
-    // Handle barcode detection
-    Quagga.onDetected((data) => {
-      const code = data.codeResult.code;
-      if (currentSensorIndex !== null) {
-        document.getElementById(`sensor-id-${currentSensorIndex}`).value = code;
-        document.getElementById('status').textContent = `Scanned: ${code}`;
-        Quagga.stop();
-        document.getElementById('scanner-container').classList.add('hidden');
-        currentSensorIndex = null;
+    // Capture image and perform OCR
+    async function captureAndOCR() {
+      const video = document.getElementById('scanner');
+      const canvas = document.getElementById('scanner-overlay');
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+      document.getElementById('status').textContent = 'Processing image...';
+      try {
+        const { data: { text } } = await Tesseract.recognize(canvas.toDataURL('image/png'), 'eng', {
+          logger: m => console.log(m)
+        });
+        const cleanedText = text.replace(/[^0-9-]/g, '').trim();
+        if (cleanedText && currentSensorIndex !== null) {
+          document.getElementById(`sensor-id-${currentSensorIndex}`).value = cleanedText;
+          document.getElementById('status').textContent = `Captured: ${cleanedText}`;
+        } else {
+          document.getElementById('status').textContent = 'No numbers detected. Try again.';
+        }
+      } catch (err) {
+        document.getElementById('status').textContent = 'Error processing image: ' + err.message;
       }
-    });
+
+      // Stop camera
+      if (stream) {
+        stream.getTracks().forEach(track => track.stop());
+        stream = null;
+      }
+      document.getElementById('scanner-container').classList.add('hidden');
+      document.getElementById('capture-button').classList.add('hidden');
+      currentSensorIndex = null;
+    }
 
     // Handle machine form submission
     document.getElementById('machine-form').addEventListener('submit', (e) => {
@@ -108,8 +124,8 @@
           <div>
             <label for="sensor-location-${i}" class="block text-sm font-medium">Sensor ${i} Location</label>
             <input type="text" id="sensor-location-${i}" required class="w-full p-2 border rounded">
-            <input type="text" id="sensor-id-${i}" readonly class="w-full p-2 border rounded mt-2" placeholder="Scan barcode...">
-            <button type="button" onclick="scanBarcode(${i})" class="w-full bg-blue-500 text-white p-2 rounded mt-2 hover:bg-blue-600">Scan Sensor ${i}</button>
+            <input type="text" id="sensor-id-${i}" readonly class="w-full p-2 border rounded mt-2" placeholder="Capture numbers...">
+            <button type="button" onclick="captureNumbers(${i})" class="w-full bg-blue-500 text-white p-2 rounded mt-2 hover:bg-blue-600">Capture Sensor ${i} NumbersEtherCAT Module Programming</button>
           </div>
         `;
       }
@@ -117,13 +133,17 @@
       document.getElementById('machine-form').reset();
     });
 
-    // Start barcode scanning for a specific sensor
-    window.scanBarcode = (index) => {
+    // Start camera for capturing numbers
+    window.captureNumbers = (index) => {
       currentSensorIndex = index;
       document.getElementById('scanner-container').classList.remove('hidden');
-      document.getElementById('status').textContent = `Scanning for Sensor ${index}...`;
-      initScanner();
+      document.getElementById('capture-button').classList.remove('hidden');
+      document.getElementById('status').textContent = `Ready to capture numbers for Sensor ${index}...`;
+      initCamera();
     };
+
+    // Handle capture button
+    document.getElementById('capture-button').addEventListener('click', captureAndOCR);
 
     // Save sensor data
     document.getElementById('save-sensors').addEventListener('click', () => {
