@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Sensor Installer</title>
   <script src="https://cdn.tailwindcss.com"></script>
-  <script src="https://unpkg.com/tesseract.js@5.1.0/dist/tesseract.min.js"></script>
+  <script src="https://unpkg.com/quagga@0.12.1/dist/quagga.min.js"></script>
   <!-- PWA Meta Tags -->
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black">
@@ -26,7 +26,12 @@
       object-fit: cover;
     }
     #scanner-overlay {
-      display: none;
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
     }
   </style>
 </head>
@@ -50,7 +55,7 @@
         <video id="scanner" playsinline autoplay></video>
         <canvas id="scanner-overlay"></canvas>
       </div>
-      <button id="capture-button" class="w-full bg-blue-500 text-white p-2 rounded hover:bg-blue-600 hidden">Capture Numbers</button>
+      <button id="capture-button" class="w-full bg-blue-500 text-white p-2 rounded hover:bg-blue-600 hidden">Scan Barcode</button>
       <form id="sensor-form" class="space-y-4"></form>
       <button id="save-sensors" class="w-full bg-green-500 text-white p-2 rounded hover:bg-green-600">Save Machine</button>
     </div>
@@ -75,14 +80,6 @@
     let entries = [];
     let stream = null;
 
-    // Check if Tesseract is loaded
-    window.addEventListener('load', () => {
-      if (typeof Tesseract === 'undefined') {
-        document.getElementById('status').textContent = 'Error: Tesseract.js failed to load. Check your internet connection and try again.';
-        console.error('Tesseract.js not loaded');
-      }
-    });
-
     // Initialize camera
     async function initCamera() {
       try {
@@ -92,61 +89,60 @@
         const video = document.getElementById('scanner');
         video.srcObject = stream;
         video.play();
-        document.getElementById('status').textContent = 'Camera ready.';
+        document.getElementById('status').textContent = 'Camera ready. Align the GS1-128 barcode.';
+        initQuagga();
       } catch (err) {
         document.getElementById('status').textContent = 'Error accessing camera: ' + err.message;
         console.error('Camera error:', err);
       }
     }
 
-    // Clean OCR output for slashed zeros
-    function cleanSlashedZeros(text) {
-      // Replace 6 or 8 with 0 in positions where slashed zeros are expected (e.g., after first number or hyphens)
-      const parts = text.split('-');
-      if (parts.length >= 4) {
-        // Based on format like "40-0-0-12-135-245-216-235", fix second and third parts if they are single digits
-        if (parts[1].match(/^[68]$/)) parts[1] = '0';
-        if (parts[2].match(/^[68]$/)) parts[2] = '0';
-      }
-      return parts.join('-').replace(/[^0-9-]/g, '').trim();
+    // Initialize QuaggaJS for GS1-128 (Code 128)
+    function initQuagga() {
+      Quagga.init({
+        inputStream: {
+          name: 'Live',
+          type: 'LiveStream',
+          target: document.querySelector('#scanner'),
+          constraints: {
+            width: 400,
+            height: 300,
+            facingMode: 'environment'
+          }
+        },
+        decoder: {
+          readers: ['code_128_reader']
+        },
+        locate: true
+      }, (err) => {
+        if (err) {
+          document.getElementById('status').textContent = 'Error initializing barcode scanner: ' + err.message;
+          console.error('Quagga init error:', err);
+          stopCamera();
+          return;
+        }
+        Quagga.start();
+      });
+
+      Quagga.onDetected((data) => {
+        const rawCode = data.codeResult.code;
+        const cleanedCode = cleanGS1Data(rawCode);
+        if (cleanedCode && currentSensorIndex !== null) {
+          document.getElementById(`sensor-id-${currentSensorIndex}`).value = cleanedCode;
+          document.getElementById('status').textContent = `Scanned: ${cleanedCode}. Please verify the ID.`;
+          stopCamera();
+          Quagga.stop();
+        }
+      });
     }
 
-    // Capture image and perform OCR
-    async function captureAndOCR() {
-      if (typeof Tesseract === 'undefined') {
-        document.getElementById('status').textContent = 'Error: Tesseract.js not loaded. Please reload the page or enter the ID manually.';
-        stopCamera();
-        return;
-      }
-
-      const video = document.getElementById('scanner');
-      const canvas = document.getElementById('scanner-overlay');
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
-      const ctx = canvas.getContext('2d');
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-
-      document.getElementById('status').textContent = 'Processing image...';
-      document.getElementById('capture-button').disabled = true;
-
-      try {
-        const { data: { text } } = await Tesseract.recognize(canvas.toDataURL('image/png'), 'eng', {
-          logger: m => console.log(m)
-        });
-        const cleanedText = cleanSlashedZeros(text);
-        if (cleanedText && currentSensorIndex !== null) {
-          document.getElementById(`sensor-id-${currentSensorIndex}`).value = cleanedText;
-          document.getElementById('status').textContent = `Captured: ${cleanedText}. Please verify the ID (zeros may be misread).`;
-        } else {
-          document.getElementById('status').textContent = 'No numbers detected. Try again or enter manually.';
-        }
-      } catch (err) {
-        document.getElementById('status').textContent = 'Error processing image: ' + err.message;
-        console.error('OCR error:', err);
-      }
-
-      stopCamera();
-      document.getElementById('capture-button').disabled = false;
+    // Clean GS1-128 data (remove AIs and non-relevant characters)
+    function cleanGS1Data(code) {
+      // Remove FNC1 (ASCII 29) and common AIs like (00), (01), etc.
+      let cleaned = code.replace(/\u001d/g, '').replace(/^\(?\d{2}\)?/, '');
+      // Keep only numbers and hyphens, based on your format (e.g., 40-0-0-12-135-245-216-235)
+      cleaned = cleaned.replace(/[^0-9-]/g, '').trim();
+      return cleaned.length > 0 ? cleaned : null;
     }
 
     // Stop camera
@@ -178,8 +174,8 @@
             <label for="sensor-location-${i}" class="block text-sm font-medium">Sensor ${i} Location</label>
             <input type="text" id="sensor-location-${i}" required class="w-full p-2 border rounded">
             <label for="sensor-id-${i}" class="block text-sm font-medium mt-2">Sensor ${i} ID</label>
-            <input type="text" id="sensor-id-${i}" class="w-full p-2 border rounded" placeholder="Capture or enter numbers...">
-            <button type="button" onclick="captureNumbers(${i})" class="w-full bg-blue-500 text-white p-2 rounded mt-2 hover:bg-blue-600">Capture Sensor ${i} Numbers</button>
+            <input type="text" id="sensor-id-${i}" class="w-full p-2 border rounded" placeholder="Scan or enter numbers...">
+            <button type="button" onclick="scanBarcode(${i})" class="w-full bg-blue-500 text-white p-2 rounded mt-2 hover:bg-blue-600">Scan Sensor ${i} Barcode</button>
           </div>
         `;
       }
@@ -188,17 +184,19 @@
       document.getElementById('status').textContent = '';
     });
 
-    // Start camera for capturing numbers
-    window.captureNumbers = (index) => {
+    // Start camera for scanning barcode
+    window.scanBarcode = (index) => {
       currentSensorIndex = index;
       document.getElementById('scanner-container').classList.remove('hidden');
       document.getElementById('capture-button').classList.remove('hidden');
-      document.getElementById('status').textContent = `Ready to capture numbers for Sensor ${index}...`;
+      document.getElementById('status').textContent = `Ready to scan GS1-128 barcode for Sensor ${index}...`;
       initCamera();
     };
 
-    // Handle capture button
-    document.getElementById('capture-button').addEventListener('click', captureAndOCR);
+    // Handle scan button
+    document.getElementById('capture-button').addEventListener('click', () => {
+      document.getElementById('status').textContent = 'Scanning barcode...';
+    });
 
     // Save sensor data
     document.getElementById('save-sensors').addEventListener('click', () => {
