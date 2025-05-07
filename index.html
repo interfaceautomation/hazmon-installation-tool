@@ -5,13 +5,30 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Sensor Installer</title>
   <script src="https://cdn.tailwindcss.com"></script>
-  <script src="https://unpkg.com/tesseract.js@5.1.0/dist/tesseract.min.js"></script>
+  <script src="https://unpkg.com/tesseract.js@5=5.1.0/dist/tesseract.min.js"></script>
   <!-- PWA Meta Tags -->
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black">
   <meta name="apple-mobile-web-app-title" content="Sensor Installer">
   <link rel="apple-touch-icon" href="/icon.png">
   <link rel="manifest" href="/manifest.json">
+  <style>
+    #scanner-container {
+      position: relative;
+      width: 100%;
+      max-width: 400px;
+      height: 300px;
+      overflow: hidden;
+    }
+    #scanner {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+    #scanner-overlay {
+      display: none;
+    }
+  </style>
 </head>
 <body class="bg-gray-100 flex flex-col items-center min-h-screen p-4">
   <div class="bg-white p-6 rounded-lg shadow-lg w-full max-w-md">
@@ -29,9 +46,9 @@
     </form>
     <div id="sensor-form-container" class="space-y-4 mt-4 hidden">
       <h2 class="text-lg font-semibold">Sensor Details</h2>
-      <div id="scanner-container" class="w-full h-72 bg-gray-200 mb-4 relative hidden">
-        <video id="scanner" class="w-full h-full object-cover"></video>
-        <canvas id="scanner-overlay" class="absolute top-0 left-0"></canvas>
+      <div id="scanner-container" class="bg-gray-200 mb-4 hidden">
+        <video id="scanner" playsinline autoplay></video>
+        <canvas id="scanner-overlay"></canvas>
       </div>
       <button id="capture-button" class="w-full bg-blue-500 text-white p-2 rounded hover:bg-blue-600 hidden">Capture Numbers</button>
       <form id="sensor-form" class="space-y-4"></form>
@@ -67,8 +84,10 @@
         const video = document.getElementById('scanner');
         video.srcObject = stream;
         video.play();
+        document.getElementById('status').textContent = 'Camera ready.';
       } catch (err) {
         document.getElementById('status').textContent = 'Error accessing camera: ' + err.message;
+        console.error(err);
       }
     }
 
@@ -82,6 +101,8 @@
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
       document.getElementById('status').textContent = 'Processing image...';
+      document.getElementById('capture-button').disabled = true;
+
       try {
         const { data: { text } } = await Tesseract.recognize(canvas.toDataURL('image/png'), 'eng', {
           logger: m => console.log(m)
@@ -91,10 +112,11 @@
           document.getElementById(`sensor-id-${currentSensorIndex}`).value = cleanedText;
           document.getElementById('status').textContent = `Captured: ${cleanedText}`;
         } else {
-          document.getElementById('status').textContent = 'No numbers detected. Try again.';
+          document.getElementById('status').textContent = 'No numbers detected. Try again or enter manually.';
         }
       } catch (err) {
         document.getElementById('status').textContent = 'Error processing image: ' + err.message;
+        console.error(err);
       }
 
       // Stop camera
@@ -104,6 +126,7 @@
       }
       document.getElementById('scanner-container').classList.add('hidden');
       document.getElementById('capture-button').classList.add('hidden');
+      document.getElementById('capture-button').disabled = false;
       currentSensorIndex = null;
     }
 
@@ -124,13 +147,15 @@
           <div>
             <label for="sensor-location-${i}" class="block text-sm font-medium">Sensor ${i} Location</label>
             <input type="text" id="sensor-location-${i}" required class="w-full p-2 border rounded">
-            <input type="text" id="sensor-id-${i}" readonly class="w-full p-2 border rounded mt-2" placeholder="Capture numbers...">
-            <button type="button" onclick="captureNumbers(${i})" class="w-full bg-blue-500 text-white p-2 rounded mt-2 hover:bg-blue-600">Capture Sensor ${i} NumbersEtherCAT Module Programming</button>
+            <label for="sensor-id-${i}" class="block text-sm font-medium mt-2">Sensor ${i} ID</label>
+            <input type="text" id="sensor-id-${i}" class="w-full p-2 border rounded" placeholder="Capture or enter numbers...">
+            <button type="button" onclick="captureNumbers(${i})" class="w-full bg-blue-500 text-white p-2 rounded mt-2 hover:bg-blue-600">Capture Sensor ${i} Numbers</button>
           </div>
         `;
       }
       document.getElementById('sensor-form-container').classList.remove('hidden');
       document.getElementById('machine-form').reset();
+      document.getElementById('status').textContent = '';
     });
 
     // Start camera for capturing numbers
