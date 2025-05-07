@@ -99,6 +99,18 @@
       }
     }
 
+    // Clean OCR output for slashed zeros
+    function cleanSlashedZeros(text) {
+      // Replace 6 or 8 with 0 in positions where slashed zeros are expected (e.g., after first number or hyphens)
+      const parts = text.split('-');
+      if (parts.length >= 4) {
+        // Based on format like "40-0-0-12-135-245-216-235", fix second and third parts if they are single digits
+        if (parts[1].match(/^[68]$/)) parts[1] = '0';
+        if (parts[2].match(/^[68]$/)) parts[2] = '0';
+      }
+      return parts.join('-').replace(/[^0-9-]/g, '').trim();
+    }
+
     // Capture image and perform OCR
     async function captureAndOCR() {
       if (typeof Tesseract === 'undefined') {
@@ -121,10 +133,10 @@
         const { data: { text } } = await Tesseract.recognize(canvas.toDataURL('image/png'), 'eng', {
           logger: m => console.log(m)
         });
-        const cleanedText = text.replace(/[^0-9-]/g, '').trim();
+        const cleanedText = cleanSlashedZeros(text);
         if (cleanedText && currentSensorIndex !== null) {
           document.getElementById(`sensor-id-${currentSensorIndex}`).value = cleanedText;
-          document.getElementById('status').textContent = `Captured: ${cleanedText}`;
+          document.getElementById('status').textContent = `Captured: ${cleanedText}. Please verify the ID (zeros may be misread).`;
         } else {
           document.getElementById('status').textContent = 'No numbers detected. Try again or enter manually.';
         }
