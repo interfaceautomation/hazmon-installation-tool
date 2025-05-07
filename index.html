@@ -6,6 +6,7 @@
   <title>Sensor Installer</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://unpkg.com/quagga@0.12.1/dist/quagga.min.js"></script>
+  <script src="https://unpkg.com/tesseract.js@5.1.0/dist/tesseract.min.js"></script>
   <!-- PWA Meta Tags -->
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black">
@@ -51,11 +52,15 @@
     </form>
     <div id="sensor-form-container" class="space-y-4 mt-4 hidden">
       <h2 class="text-lg font-semibold">Sensor Details</h2>
+      <div class="flex space-x-2 mb-4">
+        <button id="barcode-mode" class="flex-1 bg-blue-500 text-white p-2 rounded hover:bg-blue-600">Barcode Mode</button>
+        <button id="text-mode" class="flex-1 bg-gray-500 text-white p-2 rounded hover:bg-gray-600">Text Mode</button>
+      </div>
       <div id="scanner-container" class="bg-gray-200 mb-4 hidden">
         <video id="scanner" playsinline autoplay></video>
         <canvas id="scanner-overlay"></canvas>
       </div>
-      <button id="capture-button" class="w-full bg-blue-500 text-white p-2 rounded hover:bg-blue-600 hidden">Scan Barcode</button>
+      <button id="capture-button" class="w-full bg-blue-500 text-white p-2 rounded hover:bg-blue-600 hidden">Capture</button>
       <form id="sensor-form" class="space-y-4"></form>
       <button id="save-sensors" class="w-full bg-green-500 text-white p-2 rounded hover:bg-green-600">Save Machine</button>
     </div>
@@ -79,6 +84,7 @@
     let currentSensorIndex = null;
     let entries = [];
     let stream = null;
+    let mode = 'barcode'; // Default to barcode mode
 
     // Initialize camera
     async function initCamera() {
@@ -89,8 +95,12 @@
         const video = document.getElementById('scanner');
         video.srcObject = stream;
         video.play();
-        document.getElementById('status').textContent = 'Camera ready. Align the GS1-128 barcode.';
-        initQuagga();
+        document.getElementById('status').textContent = mode === 'barcode' 
+          ? 'Camera ready. Align the GS1-128 barcode (6-12 inches away, avoid glare).'
+          : 'Camera ready. Align the text above the barcode (6-12 inches away, clear focus).';
+        if (mode === 'barcode') {
+          initQuagga();
+        }
       } catch (err) {
         document.getElementById('status').textContent = 'Error accessing camera: ' + err.message;
         console.error('Camera error:', err);
@@ -110,8 +120,19 @@
             facingMode: 'environment'
           }
         },
+        locator: {
+          patchSize: 'small', // Increased sensitivity for small barcodes
+          halfSample: false // Disable for better accuracy
+        },
+        numOfWorkers: 4, // Maximize performance
+        frequency: 10, // Increase scan frequency
         decoder: {
-          readers: ['code_128_reader']
+          readers: ['code_128_reader'],
+          debug: {
+            drawBoundingBox: true,
+            showFrequency: true,
+            drawScanline: true
+          }
         },
         locate: true
       }, (err) => {
@@ -122,6 +143,27 @@
           return;
         }
         Quagga.start();
+      });
+
+      Quagga.onProcessed((result) => {
+        const canvas = document.getElementById('scanner-overlay');
+        const ctx = canvas.getContext('2d');
+        canvas.width = 400;
+        canvas.height = 300;
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        if (result && result.box) {
+          ctx.strokeStyle = 'red';
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          const box = result.box;
+          ctx.moveTo(box[0][0], box[0][1]);
+          for (let i = 1; i < box.length; i++) {
+            ctx.lineTo(box[i][0], box[i][1]);
+          }
+          ctx.closePath();
+          ctx.stroke();
+        }
       });
 
       Quagga.onDetected((data) => {
@@ -136,13 +178,53 @@
       });
     }
 
-    // Clean GS1-128 data (remove AIs and non-relevant characters)
+    // Clean GS1-128 data
     function cleanGS1Data(code) {
-      // Remove FNC1 (ASCII 29) and common AIs like (00), (01), etc.
       let cleaned = code.replace(/\u001d/g, '').replace(/^\(?\d{2}\)?/, '');
-      // Keep only numbers and hyphens, based on your format (e.g., 40-0-0-12-135-245-216-235)
       cleaned = cleaned.replace(/[^0-9-]/g, '').trim();
       return cleaned.length > 0 ? cleaned : null;
+    }
+
+    // Capture text with OCR
+    async function captureAndOCR() {
+      const video = document.getElementById('scanner');
+      const canvas = document.getElementById('scanner-overlay');
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+      document.getElementById('status').textContent = 'Processing text...';
+      document.getElementById('capture-button').disabled = true;
+
+      try {
+        const { data: { text } } = await Tesseract.recognize(canvas.toDataURL('image/png'), 'eng', {
+          logger: m => console.log(m)
+        });
+        const cleanedText = cleanSlashedZeros(text);
+        if (cleanedText && currentSensorIndex !== null) {
+          document.getElementById(`sensor-id-${currentSensorIndex}`).value = cleanedText;
+          document.getElementById('status').textContent = `Captured: ${cleanedText}. Please verify the ID (zeros may be misread).`;
+        } else {
+          document.getElementById('status').textContent = 'No text detected. Try again or enter manually.';
+        }
+      } catch (err) {
+        document.getElementById('status').textContent = 'Error processing text: ' + err.message;
+        console.error('OCR error:', err);
+      }
+
+      stopCamera();
+      document.getElementById('capture-button').disabled = false;
+    }
+
+    // Clean OCR output for slashed zeros
+    function cleanSlashedZeros(text) {
+      const parts = text.split('-');
+      if (parts.length >= 4) {
+        if (parts[1].match(/^[68]$/)) parts[1] = '0';
+        if (parts[2].match(/^[68]$/)) parts[2] = '0';
+      }
+      return parts.join('-').replace(/[^0-9-]/g, '').trim();
     }
 
     // Stop camera
@@ -150,6 +232,9 @@
       if (stream) {
         stream.getTracks().forEach(track => track.stop());
         stream = null;
+      }
+      if (mode === 'barcode' && Quagga.running) {
+        Quagga.stop();
       }
       document.getElementById('scanner-container').classList.add('hidden');
       document.getElementById('capture-button').classList.add('hidden');
@@ -175,7 +260,7 @@
             <input type="text" id="sensor-location-${i}" required class="w-full p-2 border rounded">
             <label for="sensor-id-${i}" class="block text-sm font-medium mt-2">Sensor ${i} ID</label>
             <input type="text" id="sensor-id-${i}" class="w-full p-2 border rounded" placeholder="Scan or enter numbers...">
-            <button type="button" onclick="scanBarcode(${i})" class="w-full bg-blue-500 text-white p-2 rounded mt-2 hover:bg-blue-600">Scan Sensor ${i} Barcode</button>
+            <button type="button" onclick="captureSensor(${i})" class="w-full bg-blue-500 text-white p-2 rounded mt-2 hover:bg-blue-600">${mode === 'barcode' ? 'Scan Sensor ' + i + ' Barcode' : 'Capture Sensor ' + i + ' Text'}</button>
           </div>
         `;
       }
@@ -184,18 +269,50 @@
       document.getElementById('status').textContent = '';
     });
 
-    // Start camera for scanning barcode
-    window.scanBarcode = (index) => {
+    // Toggle modes
+    document.getElementById('barcode-mode').addEventListener('click', () => {
+      mode = 'barcode';
+      document.getElementById('barcode-mode').classList.add('bg-blue-500');
+      document.getElementById('barcode-mode').classList.remove('bg-gray-500');
+      document.getElementById('text-mode').classList.add('bg-gray-500');
+      document.getElementById('text-mode').classList.remove('bg-blue-500');
+      updateCaptureButtons();
+    });
+
+    document.getElementById('text-mode').addEventListener('click', () => {
+      mode = 'text';
+      document.getElementById('text-mode').classList.add('bg-blue-500');
+      document.getElementById('text-mode').classList.remove('bg-gray-500');
+      document.getElementById('barcode-mode').classList.add('bg-gray-500');
+      document.getElementById('barcode-mode').classList.remove('bg-blue-500');
+      updateCaptureButtons();
+    });
+
+    function updateCaptureButtons() {
+      const buttons = document.querySelectorAll('#sensor-form button[onclick]');
+      buttons.forEach((button, index) => {
+        button.textContent = mode === 'barcode' ? `Scan Sensor ${index + 1} Barcode` : `Capture Sensor ${index + 1} Text`;
+      });
+      document.getElementById('capture-button').textContent = mode === 'barcode' ? 'Scan Barcode' : 'Capture Text';
+    }
+
+    // Start camera for capturing
+    window.captureSensor = (index) => {
       currentSensorIndex = index;
       document.getElementById('scanner-container').classList.remove('hidden');
       document.getElementById('capture-button').classList.remove('hidden');
-      document.getElementById('status').textContent = `Ready to scan GS1-128 barcode for Sensor ${index}...`;
+      document.getElementById('status').textContent = mode === 'barcode'
+        ? `Ready to scan GS1-128 barcode for Sensor ${index}...`
+        : `Ready to capture text for Sensor ${index}...`;
       initCamera();
     };
 
-    // Handle scan button
+    // Handle capture button
     document.getElementById('capture-button').addEventListener('click', () => {
-      document.getElementById('status').textContent = 'Scanning barcode...';
+      document.getElementById('status').textContent = mode === 'barcode' ? 'Scanning barcode...' : 'Processing text...';
+      if (mode === 'text') {
+        captureAndOCR();
+      }
     });
 
     // Save sensor data
